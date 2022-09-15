@@ -31,6 +31,7 @@
 #include "auxpodctrl.h"
 #include "InstrVs.h"
 #include "resource.h"
+#include "meshres.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -157,15 +158,11 @@ void ShuttleA::DefineAnimations ()
 	static UINT RightPodGrp[4] = {6,8,10,11};
 	static MGROUP_ROTATE rightpod(0,RightPodGrp,4,_V(0,0,0),_V(1,0,0),(float)PI);
 
-	
-	
-
 	// Register animation for hover/retro pods
 	anim_pod[0] = CreateAnimation (0);
 	AddAnimationComponent (anim_pod[0], 0.0f,1.0f, &leftpod);
 	anim_pod[1] = CreateAnimation (0);
 	AddAnimationComponent (anim_pod[1], 0.0f,1.0f,&rightpod);
-
 
 	static UINT UpperDockHatch = 19;
 	static MGROUP_ROTATE upperhatch(0,&UpperDockHatch,1,_V(0,0.554f,18.677401f),_V(-1,0,0),(float)PI);
@@ -173,17 +170,19 @@ void ShuttleA::DefineAnimations ()
 	static MGROUP_ROTATE lowerhatch(0,&LowerDockHatch,1,_V(0,-0.554f,18.677401f),_V(1,0,0),(float)PI);
 	anim_dock = CreateAnimation (0);
 	AddAnimationComponent (anim_dock,0.0f,1.0f, &upperhatch);
-	AddAnimationComponent (anim_dock,0.2f,1.0f,  &lowerhatch);
-
-	static UINT OuterAirlock = 20;
-	static MGROUP_ROTATE outerairlock(0,&OuterAirlock,1,_V(0,-0.498895f,18.6131f),_V(1,0,0),(float)(0.4f*PI));
+	AddAnimationComponent (anim_dock,0.2f,1.0f, &lowerhatch);
 
 	// outer airlock
+	static UINT OuterAirlock_groups = GRP_Docking_Hatch;
+	static MGROUP_ROTATE OuterAirlock_anim(0, &OuterAirlock_groups, 1, _V(0.498895f, 0.0f, 18.6131f), _V(0, -1, 0), (float)(0.51f*PI));
 	anim_lock[0] = CreateAnimation (0);
-	AddAnimationComponent (anim_lock[0], 0.0f ,1.0f,&outerairlock);
+	AddAnimationComponent (anim_lock[0], 0.0f ,1.0f, &OuterAirlock_anim);
 	
-	// inner airlock - dummy
+	// inner airlock
+	static UINT InnerAirlock_groups = GRP_Airlock_Hatch;
+	static MGROUP_ROTATE InnerAirlock_anim(0, &InnerAirlock_groups, 1, _V(-0.4102f, 0.0f, 16.5474f), _V(0, -1, 0), (float)(0.55f * PI));
 	anim_lock[1] = CreateAnimation (0);
+	AddAnimationComponent(anim_lock[1], 0.0f, 1.0f, &InnerAirlock_anim);
 
 	//Gear animation
 	static UINT GEAR_left_leg[3]={30,32,34};
@@ -221,8 +220,6 @@ void ShuttleA::DefineAnimations ()
 	static MGROUP_ROTATE MGEAR_right_leg_mid_p2(0,&GEAR_right_leg_mid_p2,1,_V(2.464f,-1.718f,0.0f),_V(0,0,1),0.5235f);
 	static MGROUP_ROTATE MGEAR_right_leg_back_p1(0,&GEAR_right_leg_back_p1,1,_V(2.49f,-1.942f,0.0f),_V(0,0,1),0.9948f);
 	static MGROUP_ROTATE MGEAR_right_leg_back_p2(0,&GEAR_right_leg_back_p2,1,_V(1.947f,-1.718f,0.0f),_V(0,0,1),0.5235f);
-
-
 
 	anim_gear = CreateAnimation(0.0);
 	AddAnimationComponent (anim_gear, 0.0f, 0.5f, &MGEAR_left_leg_first);
@@ -289,7 +286,6 @@ void ShuttleA::DefineAnimations ()
 	static UINT RCS_mode_switch=33;
 	static MGROUP_ROTATE MRCS_mode_switch(1,&RCS_mode_switch,1,_V(-0.479842445f,2.100993049f,16.32856942f),//added 0.10 to Z
 																_V(0.996194179f,0.036831321f,-0.078997542f),1.570796327f);
-		
 	anim_rcs_mode= CreateAnimation(0.5);
 	AddAnimationComponent(anim_rcs_mode,0.0f,1.0f,&MRCS_mode_switch);
 
@@ -314,7 +310,6 @@ void ShuttleA::DefineAnimations ()
 	anim_gear_switch = CreateAnimation(0.5);
 	AddAnimationComponent(anim_gear_switch,0.0f,1.0f,&MGEAR_switch);
 
-
 	//CARGO ARM switch
 
 	static UINT CARGO_switch=54;
@@ -322,7 +317,6 @@ void ShuttleA::DefineAnimations ()
 														_V(0.0f,0.061554834f,-0.998103703f),1.570796327f/2.0f);
 	anim_cargo_switch = CreateAnimation(0.5);
 	AddAnimationComponent(anim_cargo_switch,0.0f,1.0f,&MCARGO_switch);
-
 }
 
 // --------------------------------------------------------------
@@ -908,53 +902,57 @@ bool ShuttleA::RedrawPanel_PodangleIndicator (SURFHANDLE surf)
 // --------------------------------------------------------------
 void ShuttleA::RedrawPanel_Fuelstatus (SURFHANDLE surf, int part)
 {
+	using namespace oapi;
+
 	char cbuf[20];
 	double m, m0, rate, lvl;
+	
+	oapi::Sketchpad *pSkp = oapiGetSketchpad(surf);
 
-	HDC hDC = oapiGetDC (surf);
-	SelectObject (hDC, g_Param.hFont[0]);
-	SelectObject (hDC, g_Param.hBrush[1]);
-	SelectObject (hDC, g_Param.hPen[2]);
-	SetTextColor (hDC, RGB(224,224,224));
-	SetBkMode (hDC, TRANSPARENT);
-	SetTextAlign (hDC, TA_RIGHT);
+	pSkp->SetFont(g_Param.pFont[0]);
+	pSkp->SetBrush(g_Param.pBrush[1]);
+	pSkp->SetPen(g_Param.pPen[2]);
+
+	pSkp->SetTextColor(RGB(224,224,224));
+	pSkp->SetBackgroundMode(Sketchpad::BK_TRANSPARENT);
+	pSkp->SetTextAlign(Sketchpad::RIGHT, Sketchpad::TOP);
 
 	switch (part) {
 	case 0:
 		sprintf (cbuf, "%0.1f", GetThrusterLevel (th_hover[0]) * MAX_HOVER_THRUST / ISP);
-		Rectangle (hDC, 0, 2, 20, 11); TextOut (hDC, 21, 0, cbuf, strlen(cbuf));
+		pSkp->Rectangle (0, 2, 20, 11); pSkp->Text(21, 0, cbuf, strlen(cbuf));
 		sprintf (cbuf, "%0.1f", GetThrusterLevel (th_hover[1]) * MAX_HOVER_THRUST / ISP);
-		Rectangle (hDC, 0, 32, 20, 41); TextOut (hDC, 21, 30, cbuf, strlen(cbuf));
+		pSkp->Rectangle (0, 32, 20, 41); pSkp->Text (21, 30, cbuf, strlen(cbuf));
 		sprintf (cbuf, "%0.1f", GetThrusterLevel (th_pod[1]) * MAX_RETRO_THRUST / ISP);
-		Rectangle (hDC, 0, 60, 20, 69); TextOut (hDC, 21, 58, cbuf, strlen(cbuf));
+		pSkp->Rectangle (0, 60, 20, 69); pSkp->Text (21, 58, cbuf, strlen(cbuf));
 		sprintf (cbuf, "%0.1f", GetThrusterLevel (th_pod[0]) * MAX_RETRO_THRUST / ISP);
-		Rectangle (hDC, 0, 90, 20, 99); TextOut (hDC, 21, 88, cbuf, strlen(cbuf));
+		pSkp->Rectangle (0, 90, 20, 99); pSkp->Text (21, 88, cbuf, strlen(cbuf));
 		sprintf (cbuf, "%0.1f", GetThrusterLevel (th_main[0]) * MAX_MAIN_THRUST / ISP);
-		Rectangle (hDC, 0, 117, 20, 126); TextOut (hDC, 21, 115, cbuf, strlen(cbuf));
+		pSkp->Rectangle (0, 117, 20, 126); pSkp->Text (21, 115, cbuf, strlen(cbuf));
 		sprintf (cbuf, "%0.1f", GetThrusterLevel (th_main[1]) * MAX_MAIN_THRUST / ISP);
-		Rectangle (hDC, 0, 147, 20, 156); TextOut (hDC, 21, 145, cbuf, strlen(cbuf));
+		pSkp->Rectangle (0, 147, 20, 156); pSkp->Text (21, 145, cbuf, strlen(cbuf));
 		break;
 	case 1:
-		SelectObject (hDC, g_Param.hBrush[0]);
+		pSkp->SetBrush(g_Param.pBrush[0]);
 		m = GetPropellantMass (ph_main);
 		if (m > MAX_MAIN_FUEL*0.2) {
 			rate = GetPropellantFlowrate (ph_main);
 			lvl = m*1.25/MAX_MAIN_FUEL - 0.25;
-			Rectangle (hDC,  0, 50, 32, (int)((1.0-lvl)*50.0));
-			Rectangle (hDC, 40, 50, 72, (int)((1.0-lvl)*50.0));
+			pSkp->Rectangle (0, 50, 32, (int)((1.0-lvl)*50.0));
+			pSkp->Rectangle (40, 50, 72, (int)((1.0-lvl)*50.0));
 			m0 = 0.5 * (m - MAX_MAIN_FUEL*0.2);
 		} else {
 			rate = lvl = m0 = 0;
 		}
 		sprintf (cbuf, "%0.0f", m0);
-		SetTextAlign (hDC, TA_CENTER);
-		TextOut (hDC, 16, 20, cbuf, strlen (cbuf));
-		TextOut (hDC, 56, 20, cbuf, strlen (cbuf));
+		pSkp->SetTextAlign (Sketchpad::CENTER, Sketchpad::TOP);
+		pSkp->Text (16, 20, cbuf, strlen (cbuf));
+		pSkp->Text (56, 20, cbuf, strlen (cbuf));
 		sprintf (cbuf, "%0.1f", 0.5*rate);
-		SetTextAlign (hDC, TA_RIGHT);
-		SelectObject (hDC, g_Param.hBrush[1]);
-		Rectangle (hDC, 21, 57, 42, 66); TextOut (hDC, 42, 55, cbuf, strlen(cbuf));
-		Rectangle (hDC, 61, 57, 82, 66); TextOut (hDC, 82, 55, cbuf, strlen(cbuf));
+		pSkp->SetTextAlign (Sketchpad::RIGHT, Sketchpad::TOP);
+		pSkp->SetBrush (g_Param.pBrush[1]);
+		pSkp->Rectangle (21, 57, 42, 66); pSkp->Text (42, 55, cbuf, strlen(cbuf));
+		pSkp->Rectangle (61, 57, 82, 66); pSkp->Text (82, 55, cbuf, strlen(cbuf));
 		break;
 	case 2:
 		m = GetPropellantMass (ph_main);
@@ -967,33 +965,33 @@ void ShuttleA::RedrawPanel_Fuelstatus (SURFHANDLE surf, int part)
 			m = MAX_MAIN_FUEL*0.2;
 		}
 		if (lvl > 0) {
-			SelectObject (hDC, g_Param.hBrush[0]);
-			Rectangle (hDC,  0, 57, 32, 19+(int)((1.0-lvl)*38.0));
+			pSkp->SetBrush(g_Param.pBrush[0]);
+			pSkp->Rectangle (0, 57, 32, 19+(int)((1.0-lvl)*38.0));
 		}
 		sprintf (cbuf, "%0.0f", m);
-		SetTextAlign (hDC, TA_CENTER);
-		TextOut (hDC, 16, 33, cbuf, strlen (cbuf));
+		pSkp->SetTextAlign(Sketchpad::CENTER, Sketchpad::TOP);
+		pSkp->Text (16, 33, cbuf, strlen (cbuf));
 		sprintf (cbuf, "%0.1f", rate);
-		SetTextAlign (hDC, TA_RIGHT);
-		SelectObject (hDC, g_Param.hBrush[1]);
-		Rectangle (hDC, 21, 2, 42, 11); TextOut (hDC, 42, 0, cbuf, strlen(cbuf));
+		pSkp->SetTextAlign(Sketchpad::RIGHT, Sketchpad::TOP);
+		pSkp->SetBrush(g_Param.pBrush[1]);
+		pSkp->Rectangle (21, 2, 42, 11); pSkp->Text (42, 0, cbuf, strlen(cbuf));
 		break;
 	case 3:
 		m = GetPropellantMass (ph_rcs);
 		if (m > 0) {
-			SelectObject (hDC, g_Param.hBrush[0]);
-			Rectangle (hDC, 0, 25, 32, (int)((1.0-m/MAX_RCS_FUEL)*25.0));
+			pSkp->SetBrush(g_Param.pBrush[0]);
+			pSkp->Rectangle (0, 25, 32, (int)((1.0-m/MAX_RCS_FUEL)*25.0));
 		}
-		SetTextAlign (hDC, TA_CENTER);
+		pSkp->SetTextAlign(Sketchpad::CENTER, Sketchpad::TOP);
 		sprintf (cbuf, "%0.0f", m);
-		TextOut (hDC, 16, 7, cbuf, strlen(cbuf));
-		SetTextAlign (hDC, TA_RIGHT);
-		SelectObject (hDC, g_Param.hBrush[1]);
+		pSkp->Text (16, 7, cbuf, strlen(cbuf));
+		pSkp->SetTextAlign(Sketchpad::RIGHT, Sketchpad::TOP);
+		pSkp->SetBrush(g_Param.pBrush[1]);
 		sprintf (cbuf, "%0.2f", GetPropellantFlowrate (ph_rcs));
-		Rectangle (hDC, 21, 30, 42, 39); TextOut (hDC, 42, 28, cbuf, strlen(cbuf));
+		pSkp->Rectangle (21, 30, 42, 39); pSkp->Text (42, 28, cbuf, strlen(cbuf));
 		break;
 	} 
-	oapiReleaseDC (surf, hDC);
+	oapiReleaseSketchpad(pSkp);
 }
 
 // --------------------------------------------------------------
@@ -1101,6 +1099,7 @@ void ShuttleA::clbkSetClassCaps (FILEHANDLE cfg)
 	int i, j;
 
 	SetSize (17.0);
+	SetClipRadius(19.0);
 	SetPMI (_V(86.6, 89.8, 5.5));
 	SetEmptyMass (EMPTY_MASS);
 	payload_mass = 0.0;
@@ -1332,8 +1331,8 @@ void ShuttleA::clbkLoadStateEx (FILEHANDLE scn, void *vs)
 			sscanf (line+9, "%d%lf", &dock_status, &dock_proc);
 		} else if (!_strnicmp (line, "AIRLOCK", 7)) {
 			sscanf (line+7, "%d%lf", &lock_status[0], &lock_proc[0]);
-		} else if (!_strnicmp (line, "IAIRLOCK", 7)) {
-			sscanf (line+7, "%d%lf", &lock_status[1], &lock_proc[1]);
+		} else if (!_strnicmp (line, "IAIRLOCK", 8)) {
+			sscanf (line+8, "%d%lf", &lock_status[1], &lock_proc[1]);
 		} else if (!_strnicmp (line, "GEAR", 4)) {
 			sscanf (line+4, "%d%lf", &gear_status, &gear_proc);
 		} else if (!_strnicmp (line, "PAYLOAD MASS", 12)) {
@@ -2471,6 +2470,13 @@ DLLCLBK void InitModule (HINSTANCE hModule)
 	oapiRegisterCustomControls (hModule);
 
 	// allocate GDI resources
+	g_Param.pFont[0] = oapiCreateFont(-10, false, "Arial");
+	g_Param.pPen[0] = oapiCreatePen(1, 3, RGB(120, 220, 120));
+	g_Param.pPen[1] = oapiCreatePen(1, 1, RGB(220, 220, 120));
+	g_Param.pPen[2] = oapiCreatePen(1, 1, RGB(0, 0, 0));
+	g_Param.pBrush[0] = oapiCreateBrush(0x008000);
+	g_Param.pBrush[1] = oapiCreateBrush(0x000000);
+
 	g_Param.hFont[0] = CreateFont (-10, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, "Arial");
 	g_Param.hPen[0] = CreatePen (PS_SOLID, 3, RGB (120,220,120));
 	g_Param.hPen[1] = CreatePen (PS_SOLID, 1, RGB (220,220,120));
@@ -2480,7 +2486,7 @@ DLLCLBK void InitModule (HINSTANCE hModule)
 
 	// load 2D panel texture
 	ShuttleA::panel2dtex = oapiLoadTexture ("ShuttleA\\panel2d.dds");
-	ShuttleA::paneleltex = oapiLoadTexture ("ShuttleA\\panel_el.dds");
+	ShuttleA::paneleltex = oapiLoadSurfaceEx("ShuttleA\\panel_el.dds", OAPISURFACE_TEXTURE | OAPISURFACE_RENDERTARGET);
 	ShuttleA::aditex = oapiLoadTexture ("Common\\adiball_grey.dds");
 }
 

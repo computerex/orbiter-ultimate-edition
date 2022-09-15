@@ -43,6 +43,7 @@
 #include "Memstat.h"
 #include "CustomControls.h"
 #include "Help.h"
+#include "Util.h"
 #include "DlgHelp.h" // temporary
 #include "htmlctrl.h"
 #include "DlgCtrl.h"
@@ -183,8 +184,18 @@ int _matherr(struct _exception *except )
 // Application entry containing message loop
 
 
-INT WINAPI WinMain (HINSTANCE hInstance, HINSTANCE, PSTR strCmdLine, INT nCmdShow)
+INT WINAPI WinMain (HINSTANCE hInstance, HINSTANCE, LPSTR strCmdLine, INT nCmdShow)
 {
+#ifndef INLINEGRAPHICS
+	// Verify working directory
+	char dir[1024];
+	GetCurrentDirectory(1024, dir);
+	// If the server version was launched from its own subdirectory, step back
+	// up to the Orbiter main directory
+	if (strlen(dir) >= 15 && !stricmp (dir+strlen(dir)-15, "\\Modules\\Server"))
+		SetCurrentDirectory("..\\..");
+#endif
+
 #ifdef INLINEGRAPHICS
 	// determine whether another instance already exists
 	hMutex = CreateMutex (NULL, TRUE, "Test");
@@ -244,6 +255,7 @@ void SetEnvironmentVars ()
 		sprintf (cbuf, "PATH=%s;Modules", ppath);
 		_putenv (cbuf);
 		delete []cbuf;
+		cbuf = NULL;
 	} else {
 		_putenv ("PATH=Modules");
 	}
@@ -303,7 +315,6 @@ Orbiter::Orbiter ()
 		fine_counter_step = 1.0 / freq;
 	}
 
-	nmodule         = 0;
 	pDI             = new DInput(this); TRACENEW
 	pConfig         = new Config; TRACENEW
 	pState          = NULL;
@@ -471,7 +482,7 @@ void Orbiter::SaveConfig ()
 VOID Orbiter::CloseApp (bool fast_shutdown)
 {
 	SaveConfig();
-	while (nmodule) UnloadModule (module[0].name);
+	while (m_Plugin.size()) UnloadModule (m_Plugin.begin()->hDLL);
 
 	if (bRoughType)
 		DeactivateRoughType();
@@ -479,6 +490,7 @@ VOID Orbiter::CloseApp (bool fast_shutdown)
 	if (!fast_shutdown) {
 #ifdef INLINEGRAPHICS
 		if (oclient) {
+			oclient->clbkCleanup();
 			delete oclient;
 			oclient = 0;
 			gclient = 0;
@@ -492,8 +504,12 @@ VOID Orbiter::CloseApp (bool fast_shutdown)
 		if (pState)   delete pState;
 		if (script) delete script;
 		if (ncustomcmd) {
-			for (DWORD i = 0; i < ncustomcmd; i++) delete []customcmd[i].label;
+			for (DWORD i = 0; i < ncustomcmd; i++) {
+				delete []customcmd[i].label;
+				customcmd[i].label = NULL;
+			}
 			delete []customcmd;
+			customcmd = NULL;
 		}
 		oapiUnregisterCustomControls (hInst);
 	}
@@ -570,11 +586,11 @@ HINSTANCE Orbiter::LoadModule (const char *path, const char *name)
 	register_module = NULL; // Clear the module. The loaded library may optionally populate it on LoadLibrary() call below.
 
 	// Load the module DLL
-	HINSTANCE hi = NULL;
+	HINSTANCE hDLL = NULL;
 	char cbuf[256];
 	if (FindStandaloneDll(path, name, cbuf)) // try to find standalone plugin file
 	{
-		hi = LoadLibrary (cbuf);
+		hDLL = LoadLibrary (cbuf);
 	}
 	else // try to find plugin in a plugin folder
 	{
@@ -584,7 +600,7 @@ HINSTANCE Orbiter::LoadModule (const char *path, const char *name)
 			// Convert to absolute path, otherwise LoadLibraryEx fails with error code 87.
 			// See https://stackoverflow.com/questions/36275535/loadlibraryex-error-87-the-parameter-is-incorrect
 			sprintf(cbuf, "%s\\%s", cwd, cbuf2);
-			hi = LoadLibraryEx(cbuf, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+			hDLL = LoadLibraryEx(cbuf, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 		}
 		else
 		{
@@ -593,80 +609,63 @@ HINSTANCE Orbiter::LoadModule (const char *path, const char *name)
 		}
 	}
 
-	if (hi) {
-		struct DLLModule *tmp = new struct DLLModule[nmodule+1]; TRACENEW
-		if (nmodule) {
-			memcpy (tmp, module, nmodule*sizeof(struct DLLModule));
-			delete []module;
-		}
-		module = tmp;
-		module[nmodule].module = (register_module ? register_module : new oapi::Module (hi));
-		module[nmodule].hMod = hi;
-		module[nmodule].name = new char[strlen(name)+1]; TRACENEW
-		strcpy (module[nmodule].name, name);
-		nmodule++;
+	if (hDLL) {
+		DLLModule module = { hDLL, register_module ? register_module : new oapi::Module(hDLL), std::string(name), !register_module };
+		// If the DLL doesn't provide a Module interface, create a default one which provides the legacy callbacks
+		LOGOUT(register_module ? "Loading module %s" : "Loading module %s (legacy interface)", name);
+		m_Plugin.push_back(module);
 	} else {
 		DWORD err = GetLastError();
 		LOGOUT_ERR ("Failed loading module %s (code %d)", cbuf, err);
 	}
-	return hi;
+	return hDLL;
 }
 
 //-----------------------------------------------------------------------------
 // Name: UnloadModule()
 // Desc: Unload a named plugin DLL
 //-----------------------------------------------------------------------------
-void Orbiter::UnloadModule (const char *name)
+bool Orbiter::UnloadModule (const std::string &name)
 {
-	DWORD i, j, k;
-	struct DLLModule *tmp;
-	for (i = 0; i < nmodule; i++)
-		if (!_stricmp (module[i].name, name)) break;
-	if (i == nmodule) return; // not present
-	delete []module[i].name;
-	delete module[i].module;
-	FreeLibrary (module[i].hMod);
-	if (nmodule > 1) {
-		tmp = new struct DLLModule[nmodule-1]; TRACENEW
-		for (j = k = 0; j < nmodule; j++)
-			if (j != i) tmp[k++] = module[j];
-	} else tmp = 0;
-	delete []module;
-	module = tmp;
-	nmodule--;
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++) {
+		if (iequal(it->sName, name)) {
+			LOGOUT("Unloading module %s", it->sName.c_str());
+			if (it->bLocalAlloc)
+				delete it->pModule;
+			FreeLibrary(it->hDLL);
+			m_Plugin.erase(it);
+			return true;
+		}
+	}
+	return false;
 }
 
 //-----------------------------------------------------------------------------
 // Name: UnloadModule()
 // Desc: Unload a module by its instance
 //-----------------------------------------------------------------------------
-void Orbiter::UnloadModule (HINSTANCE hi)
+bool Orbiter::UnloadModule (HINSTANCE hDLL)
 {
-	DWORD i, j, k;
-	struct DLLModule *tmp;
-	for (i = 0; i < nmodule; i++)
-		if (hi == module[i].hMod) break;
-	if (i == nmodule) return; // not present
-	delete []module[i].name;
-	delete module[i].module;
-	FreeLibrary (module[i].hMod);
-	if (nmodule > 1) {
-		tmp = new struct DLLModule[nmodule-1]; TRACENEW
-		for (j = k = 0; j < nmodule; j++)
-			if (j != i) tmp[k++] = module[j];
-	} else tmp = 0;
-	delete []module;
-	module = tmp;
-	nmodule--;
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++) {
+		if (it->hDLL == hDLL) {
+			LOGOUT("Unloading module %s", it->sName.c_str());
+			if (it->bLocalAlloc)
+				delete it->pModule;
+			FreeLibrary(it->hDLL);
+			m_Plugin.erase(it);
+			return true;
+		}
+	}
+	return false;
 }
 
 //-----------------------------------------------------------------------------
 // Name: FindModuleProc()
 // Desc: Returns address of a procedure in a plugin module
 //-----------------------------------------------------------------------------
-OPC_Proc Orbiter::FindModuleProc (DWORD nmod, const char *procname)
+OPC_Proc Orbiter::FindModuleProc (HINSTANCE hDLL, const char *procname)
 {
-	return (OPC_Proc)GetProcAddress (module[nmod].hMod, procname);
+	return (OPC_Proc)GetProcAddress (hDLL, procname);
 }
 
 //-----------------------------------------------------------------------------
@@ -744,13 +743,13 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	// Generate logical world objects
 #ifdef INLINEGRAPHICS
 	// these should be called from withing oclient
-	CreatePatchDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
+	CreatePatchDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
 	VObject::CreateDeviceObjects (oclient);
-	PatchManager::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
-	TileManager::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
-	TileManager2Base::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
-	CSphereManager::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
-	VVessel::CreateDeviceObjects (oclient->m_pd3dDevice);
+	PatchManager::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
+	TileManager::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
+	TileManager2Base::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
+	CSphereManager::CreateDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
+	VVessel::CreateDeviceObjects (oclient->m_pD3DDevice);
 #endif // INLINEGRAPHICS
 	if (gclient) {
 		Base::CreateStaticDeviceObjects();
@@ -782,8 +781,10 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 
 	LOGOUT("Finished initialising status");
 
-	g_camera->InitState (scenario, g_focusobj);
-	if (g_pane) g_pane->SetFOV (g_camera->Aperture());
+	if (g_camera) {
+		g_camera->InitState (scenario, g_focusobj);
+		if (g_pane) g_pane->SetFOV (g_camera->Aperture());
+	}
 	LOGOUT ("Finished initialising camera");
 
 	if (gclient) {
@@ -821,20 +822,19 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	}
 #endif
 	FRecorder_Reset();
-	if (bPlayback = g_focusobj->bFRplayback) {
+	if ((g_focusobj) && (bPlayback = g_focusobj->bFRplayback)) {
 		FRecorder_OpenPlayback (pState->PlaybackDir());
 		if (g_pane && g_pane->MIBar()) g_pane->MIBar()->SetPlayback(true);
 	}
 
 	// let plugins read their states from the scenario file
-	for (i = 0; i < nmodule; i++) {
-		void (*opcLoadState)(FILEHANDLE) = (void(*)(FILEHANDLE))FindModuleProc (i, "opcLoadState");
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++) {
+		void (*opcLoadState)(FILEHANDLE) = (void(*)(FILEHANDLE))FindModuleProc(it->hDLL, "opcLoadState");
 		if (opcLoadState) {
-			ifstream ifs (ScnPath (scenario));
-			char cbuf[256] = "BEGIN_";
-			strcat (cbuf, module[i].name);
-			if (FindLine (ifs, cbuf)) {
-				opcLoadState ((FILEHANDLE)&ifs);
+			ifstream ifs(ScnPath(scenario));
+			std::string str = "BEGIN_" + it->sName;
+			if (FindLine(ifs, str.c_str())) {
+				opcLoadState((FILEHANDLE)&ifs);
 			}
 		}
 	}
@@ -855,9 +855,9 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	if (gclient) gclient->clbkPostCreation();
 	g_psys->PostCreation ();
 
-	for (i = 0; i < nmodule; i++) {
-		module[i].module->clbkSimulationStart (rendermode);
-		CHECKCWD(cwd,module[i].name);
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++) {
+		it->pModule->clbkSimulationStart(rendermode);
+		CHECKCWD(cwd, it->sName.c_str());
 	}
 
 	if (g_pane) {
@@ -899,8 +899,8 @@ void Orbiter::CloseSession ()
 
 	if      (bRecord)   ToggleRecorder();
 	else if (bPlayback) EndPlayback();
-	char *desc = "Current scenario state\n\n\nContains the latest simulation state.";
-	SaveScenario (CurrentScenario, desc);
+	char* desc = pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState";
+	SaveScenario (CurrentScenario, desc, 2);
 	if (hScnInterp) {
 		script->DelInterpreter (hScnInterp);
 		hScnInterp = NULL;
@@ -925,6 +925,7 @@ void Orbiter::CloseSession ()
 		if (nsnote) {
 			for (DWORD i = 0; i < nsnote; i++) delete snote[i];
 			delete []snote;
+			snote = NULL;
 			nsnote = 0;
 		}
 		InlineDialog::GlobalExit (gclient);
@@ -940,8 +941,8 @@ void Orbiter::CloseSession ()
 		if (gclient)
 			gclient->clbkDestroyRenderWindow (false); // destroy graphics objects
 
-		for (i = 0; i < nmodule; i++)
-			module[i].module->clbkSimulationEnd();
+		for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+			it->pModule->clbkSimulationEnd();
 
 		hRenderWnd = NULL;
 		pDI->DestroyDevices();
@@ -953,8 +954,8 @@ void Orbiter::CloseSession ()
 			gclient->clbkDestroyRenderWindow (true);
 		}
 
-		for (i = 0; i < nmodule; i++)
-			module[i].module->clbkSimulationEnd();
+		for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+			it->pModule->clbkSimulationEnd();
 
 		hRenderWnd = NULL;
 		pDI->DestroyDevices();
@@ -1188,9 +1189,9 @@ void Orbiter::Freeze (bool bFreeze)
 	bSession = !bFreeze;
 
 	// broadcast pause state to plugins
-	for (DWORD k = 0; k < nmodule; k++) {
-		module[k].module->clbkPause (bFreeze);
-	}
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkPause(bFreeze);
+
 	if (bFreeze) Suspend ();
 	else Resume ();
 }
@@ -1217,10 +1218,8 @@ Vessel *Orbiter::SetFocusObject (Vessel *vessel, bool setview)
 	if (g_pfocusobj) g_pfocusobj->FocusChanged (false, g_focusobj, g_pfocusobj);
 	g_focusobj->FocusChanged (true, g_focusobj, g_pfocusobj);
 
-	for (DWORD i = 0; i < nmodule; i++)
-		module[i].module->clbkFocusChanged (g_focusobj, g_pfocusobj);
-		//if (module[i].intf->opcFocusChanged)
-		//	module[i].intf->opcFocusChanged (g_focusobj, g_pfocusobj);
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkFocusChanged(g_focusobj, g_pfocusobj);
 
 	if (pDlgMgr) pDlgMgr->BroadcastMessage (MSG_FOCUSVESSEL, vessel);
 	DlgHelp::SetVesselHelp (g_focusobj->HelpContext());
@@ -1247,10 +1246,14 @@ void Orbiter::InsertVessel (Vessel *vessel)
 	g_psys->AddVessel (vessel);
 
 	// broadcast vessel creation to plugins
-	for (DWORD k = 0; k < nmodule; k++)
-		module[k].module->clbkNewVessel ((OBJHANDLE)vessel);
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkNewVessel((OBJHANDLE)vessel);
+
 #ifdef INLINEGRAPHICS
 	oclient->clbkNewVessel ((OBJHANDLE)vessel);
+#else
+	if (gclient)
+		gclient->clbkNewVessel((OBJHANDLE)vessel);
 #endif // INLINEGRAPHICS
 
 	if (pDlgMgr) pDlgMgr->BroadcastMessage (MSG_CREATEVESSEL, vessel);
@@ -1299,12 +1302,16 @@ bool Orbiter::KillVessels ()
 			// switch to new camera target
 			if (vessel == g_camera->Target())
 				SetView (g_focusobj, 1);
+
 			// broadcast vessel destruction to plugins
-			for (DWORD k = 0; k < nmodule; k++) {
-				module[k].module->clbkDeleteVessel ((OBJHANDLE)vessel);
-			}
+			for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+				it->pModule->clbkDeleteVessel((OBJHANDLE)vessel);
+
 #ifdef INLINEGRAPHICS
 			oclient->clbkDeleteVessel ((OBJHANDLE)vessel);
+#else
+			if (gclient)
+				gclient->clbkDeleteVessel((OBJHANDLE)vessel);
 #endif
 			// broadcast vessel destruction to all vessels
 			g_psys->BroadcastVessel (MSG_KILLVESSEL, vessel);
@@ -1332,11 +1339,14 @@ void Orbiter::NotifyObjectJump (const Body *obj, const Vector &shift)
 	if (g_camera->Target()) g_camera->Update ();
 
 	// notify plugins
-	for (DWORD k = 0; k < nmodule; k++)
-		module[k].module->clbkVesselJump ((OBJHANDLE)obj);
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkVesselJump((OBJHANDLE)obj);
 
 #ifdef INLINEGRAPHICS
 	oclient->GetScene()->Update (g_psys, &g_camera, 1, false/*m_bRunning*/, false);
+#else
+	if (gclient)
+		gclient->clbkVesselJump((OBJHANDLE)obj);
 #endif // INLINEGRAPHICS
 }
 
@@ -1407,8 +1417,11 @@ void Orbiter::DecWarpFactor ()
 void Orbiter::ApplyWarpFactor ()
 {
 	double nwarp = td.Warp();
-	for (DWORD i = 0; i < nmodule; i++)
-		module[i].module->clbkTimeAccChanged (nwarp, td.Warp());
+
+	// notify plugins
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkTimeAccChanged(nwarp, td.Warp());
+
 	if (g_pane) g_pane->SetWarp (nwarp);
 	bRealtime = (fabs (nwarp-1.0) < 1e-6);
 }
@@ -1453,36 +1466,31 @@ VOID Orbiter::IncFOV (double dfov)
 // Name: SaveScenario()
 // Desc: save current status in-game
 //-----------------------------------------------------------------------------
-bool Orbiter::SaveScenario (const char *fname, const char *desc)
+bool Orbiter::SaveScenario (const char *fname, const char *desc, int desc_type)
 {
 	pState->Update ();
 
 	ofstream ofs (ScnPath (fname));
 	if (ofs) {
-
 		// save scenario state
-		if (desc) {
-			pState->Write(ofs, desc, 0);
-		}
-		else {
-			pState->Write(ofs, 0, pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState");
-		}
+		pState->Write(ofs, desc, desc_type, 0);
+		//pState->Write(ofs, 0, pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState");
 		g_camera->Write (ofs);
 		if (g_pane) g_pane->Write (ofs);
 		g_psys->Write (ofs);
 
 		// let plugins save their states to the scenario file
-		for (DWORD k = 0; k < nmodule; k++) {
-			void (*opcSaveState)(FILEHANDLE) = (void(*)(FILEHANDLE))FindModuleProc (k, "opcSaveState");
+		for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++) {
+			void (*opcSaveState)(FILEHANDLE) = (void(*)(FILEHANDLE))FindModuleProc(it->hDLL, "opcSaveState");
 			if (opcSaveState) {
-				ofs << endl << "BEGIN_" << module[k].name << endl;
-				opcSaveState ((FILEHANDLE)&ofs);
-				ofs << "END" << endl;
+				ofs << std::endl << "BEGIN_" << it->sName << std::endl;
+				opcSaveState((FILEHANDLE)&ofs);
+				ofs << "END" << std::endl;
 			}
 		}
 		return true;
-
-	} else return false;
+	} else
+		return false;
 }
 
 //-----------------------------------------------------------------------------
@@ -1497,7 +1505,7 @@ VOID Orbiter::Quicksave ()
 	for (i = strlen(ScenarioName)-1; i > 0; i--)
 		if (ScenarioName[i-1] == '\\') break;
 	sprintf (fname, "Quicksave\\%s %04d", ScenarioName+i, ++g_qsaveid);
-	SaveScenario (fname, desc);
+	SaveScenario (fname, desc, 0);
 }
 
 //-----------------------------------------------------------------------------
@@ -1526,7 +1534,7 @@ VOID Orbiter::SavePlaybackScn (const char *fname)
 	char desc[256], scn[256] = "Playback\\";
 	sprintf (desc, "Orbiter playback scenario at T = %0.0f", td.SimT0);
 	strcat (scn, fname);
-	SaveScenario (scn, desc);
+	SaveScenario (scn, desc, 0);
 }
 
 const char *Orbiter::GetDefRecordName (void) const
@@ -1649,40 +1657,40 @@ HRESULT Orbiter::InitDeviceObjects ()
 	// All of this should be moved into the inline graphics client!
 #ifdef INLINEGRAPHICS
     D3DVIEWPORT7 vp;
-    oclient->m_pd3dDevice->GetViewport(&vp);
+    oclient->m_pD3DDevice->GetViewport(&vp);
 	// viewport-related code here
 
     // Turn on lighting. Light will be set during FrameMove() call
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_LIGHTING, bEnableLighting);
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_AMBIENT, g_pOrbiter->Cfg()->AmbientColour);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_LIGHTING, bEnableLighting);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_AMBIENT, g_pOrbiter->Cfg()->AmbientColour);
 
 	//if (!pCWorld->LoadRRTextures(m_hWnd, "textures.dat"))
 	//	LOGOUT("LoadRRTextures failed");
 
     // Set miscellaneous renderstates
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_DITHERENABLE, TRUE);
-    oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_ZENABLE, TRUE);
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_FILLMODE, pConfig->CfgDebugPrm.bWireframeMode ? D3DFILL_WIREFRAME : D3DFILL_SOLID);
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_SHADEMODE, D3DSHADE_GOURAUD);
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_SPECULARENABLE, FALSE);
-    oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_ALPHABLENDENABLE, FALSE);
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
-	oclient->m_pd3dDevice->SetRenderState (D3DRENDERSTATE_NORMALIZENORMALS, pConfig->CfgDebugPrm.bNormaliseNormals ? TRUE : FALSE);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_DITHERENABLE, TRUE);
+    oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_ZENABLE, TRUE);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_FILLMODE, pConfig->CfgDebugPrm.bWireframeMode ? D3DFILL_WIREFRAME : D3DFILL_SOLID);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_SHADEMODE, D3DSHADE_GOURAUD);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_SPECULARENABLE, FALSE);
+    oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_ALPHABLENDENABLE, FALSE);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
+	oclient->m_pD3DDevice->SetRenderState (D3DRENDERSTATE_NORMALIZENORMALS, pConfig->CfgDebugPrm.bNormaliseNormals ? TRUE : FALSE);
 
 	// Set texture renderstates
     //D3DTextr_RestoreAllTextures( pd3dDevice );
-    oclient->m_pd3dDevice->SetTextureStageState (0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-    oclient->m_pd3dDevice->SetTextureStageState (0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-    oclient->m_pd3dDevice->SetTextureStageState (0, D3DTSS_COLOROP,   D3DTOP_MODULATE);
-	oclient->m_pd3dDevice->SetTextureStageState (0, D3DTSS_MINFILTER, D3DTFN_LINEAR);
-	oclient->m_pd3dDevice->SetTextureStageState (0, D3DTSS_MAGFILTER, D3DTFG_LINEAR);
-	oclient->m_pd3dDevice->SetTextureStageState (1, D3DTSS_MINFILTER, D3DTFN_LINEAR);
-	oclient->m_pd3dDevice->SetTextureStageState (1, D3DTSS_MAGFILTER, D3DTFG_LINEAR);
+    oclient->m_pD3DDevice->SetTextureStageState (0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    oclient->m_pD3DDevice->SetTextureStageState (0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+    oclient->m_pD3DDevice->SetTextureStageState (0, D3DTSS_COLOROP,   D3DTOP_MODULATE);
+	oclient->m_pD3DDevice->SetTextureStageState (0, D3DTSS_MINFILTER, D3DTFN_LINEAR);
+	oclient->m_pD3DDevice->SetTextureStageState (0, D3DTSS_MAGFILTER, D3DTFG_LINEAR);
+	oclient->m_pD3DDevice->SetTextureStageState (1, D3DTSS_MINFILTER, D3DTFN_LINEAR);
+	oclient->m_pD3DDevice->SetTextureStageState (1, D3DTSS_MAGFILTER, D3DTFG_LINEAR);
 
 	viewW = oclient->viewW;
 	viewH = oclient->viewH;
 
-	g_texmanager = new TextureManager (oclient->m_pd3dDevice, MAX_TEXTURE_BUFSIZE); TRACENEW
+	g_texmanager = new TextureManager (oclient->m_pD3DDevice, MAX_TEXTURE_BUFSIZE); TRACENEW
 	g_texmanager->SetTexturePath (pConfig->CfgDirPrm.TextureDir);
 	//g_texmanager2 = new TextureManager2 (oclient->m_pd3dDevice); TRACENEW
 #endif // INLINEGRAPHICS
@@ -1701,9 +1709,9 @@ HRESULT Orbiter::InitDeviceObjects ()
 HRESULT Orbiter::RestoreDeviceObjects ()
 {
 #ifdef INLINEGRAPHICS
-	RestorePatchDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
-	PatchManager::RestoreDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
-	g_pane->RestoreDeviceObjects (oclient->m_pD3D, oclient->m_pd3dDevice);
+	RestorePatchDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
+	PatchManager::RestoreDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
+	g_pane->RestoreDeviceObjects (oclient->m_pD3D, oclient->m_pD3DDevice);
 #endif // INLINEGRAPHICS
 	return S_OK;
 }
@@ -1818,11 +1826,13 @@ const Mesh *Orbiter::LoadMeshGlobal (const char *fname, LoadMeshClbkFunc fClbk)
 VOID Orbiter::Output2DData ()
 {
 	g_pane->Draw ();
-	for (DWORD i = 0; i < nsnote; i++)
-		snote[i]->Render();
-	if (snote_playback && pConfig->CfgRecPlayPrm.bShowNotes) snote_playback->Render();
-	if (g_select->IsActive()) g_select->Display (0/*oclient->m_pddsRenderTarget*/);
-	if (g_input->IsActive()) g_input->Display (0/*oclient->m_pddsRenderTarget*/);
+	if (g_pane) {
+		for (DWORD i = 0; i < nsnote; i++)
+			snote[i]->Render();
+		if (snote_playback && pConfig->CfgRecPlayPrm.bShowNotes) snote_playback->Render();
+		if (g_select->IsActive()) g_select->Display(0/*oclient->m_pddsRenderTarget*/);
+		if (g_input->IsActive()) g_input->Display(0/*oclient->m_pddsRenderTarget*/);
+	}
 
 #ifdef INLINEGRAPHICS
 #ifdef OUTPUT_DBG
@@ -1849,8 +1859,8 @@ bool Orbiter::BeginTimeStep (bool running)
 		pDlgMgr->BroadcastMessage (MSG_PAUSE, (void*)isPaused);
 
 		// broadcast pause state to plugins
-		for (DWORD k = 0; k < nmodule; k++)
-			module[k].module->clbkPause (isPaused);
+		for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+			it->pModule->clbkPause(isPaused);
 	}
 
 	// Note that for times > 1e6 the simulation time is represented by
@@ -1866,7 +1876,7 @@ bool Orbiter::BeginTimeStep (bool running)
 		// enforce interval 10ms for first 3 time steps
 		deltat = 1e-2;
 		ms_prev = ms_curr-10;
-		fine_counter.QuadPart = hi_curr.QuadPart - fine_counter_freq.QuadPart/100;
+		if (use_fine_counter) fine_counter.QuadPart = hi_curr.QuadPart - fine_counter_freq.QuadPart/100;
 		launch_tick--;
 	} else {
 		// standard time update
@@ -1902,7 +1912,7 @@ bool Orbiter::BeginTimeStep (bool running)
 	}
 
 	ms_prev = ms_curr;
-	fine_counter = hi_curr;
+	if (use_fine_counter) fine_counter = hi_curr;
 	td.BeginStep (deltat, running);
 
 	if (!running) return true;
@@ -1914,7 +1924,7 @@ bool Orbiter::BeginTimeStep (bool running)
 void Orbiter::EndTimeStep (bool running)
 {
 	if (running) {
-		g_psys->FinaliseUpdate ();
+		if (g_psys) g_psys->FinaliseUpdate ();
 		//ModulePostStep();
 	}
 
@@ -1922,7 +1932,7 @@ void Orbiter::EndTimeStep (bool running)
 	td.EndStep (running);
 
 	// Update panels
-	g_camera->Update ();                           // camera
+	if (g_camera) g_camera->Update ();                           // camera
 	if (g_pane) g_pane->Update (td.SimT1, td.SysT1);
 
 	// Update visual states
@@ -1959,9 +1969,14 @@ bool Orbiter::Timejump (double _mjd, int pmode)
 
 #ifdef INLINEGRAPHICS
 	if (oclient) oclient->clbkTimeJump (td.SimT0, tjump.dt, _mjd);
+#else
+	if (gclient)
+		gclient->clbkTimeJump(td.SimT0, tjump.dt, _mjd);
 #endif
-	for (DWORD i = 0; i < nmodule; i++)
-		module[i].module->clbkTimeJump (td.SimT0, tjump.dt, _mjd);
+
+	// broadcast to modules
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkTimeJump(td.SimT0, tjump.dt, _mjd);
 
 	return true;
 }
@@ -2029,10 +2044,12 @@ bool Orbiter::UnregisterCustomCmd (int cmdId)
 //-----------------------------------------------------------------------------
 void Orbiter::ModulePreStep ()
 {
-	DWORD i;
-	for (i = 0; i < nmodule; i++)
-		module[i].module->clbkPreStep (td.SimT0, td.SimDT, td.MJD0);
-	for (i = 0; i < g_psys->nVessel(); i++)
+	// broadcast to modules
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkPreStep(td.SimT0, td.SimDT, td.MJD0);
+
+	// broadcast to vessels
+	for (DWORD i = 0; i < g_psys->nVessel(); i++)
 		g_psys->GetVessel(i)->ModulePreStep (td.SimT0, td.SimDT, td.MJD0);
 }
 
@@ -2042,11 +2059,13 @@ void Orbiter::ModulePreStep ()
 //-----------------------------------------------------------------------------
 void Orbiter::ModulePostStep ()
 {
-	DWORD i;
-	for (i = 0; i < g_psys->nVessel(); i++)
+	// broadcast to vessels
+	for (DWORD i = 0; i < g_psys->nVessel(); i++)
 		g_psys->GetVessel(i)->ModulePostStep (td.SimT1, td.SimDT, td.MJD1);
-	for (i = 0; i < nmodule; i++)
-		module[i].module->clbkPostStep (td.SimT1, td.SimDT, td.MJD1);
+
+	// broadcast to modules
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		it->pModule->clbkPostStep(td.SimT1, td.SimDT, td.MJD1);
 }
 
 //-----------------------------------------------------------------------------
@@ -2567,19 +2586,22 @@ bool Orbiter::MouseEvent (UINT event, DWORD state, DWORD x, DWORD y)
 bool Orbiter::BroadcastMouseEvent (UINT event, DWORD state, DWORD x, DWORD y)
 {
 	bool consume = false;
-	for (DWORD k = 0; k < nmodule; k++) {
-		if (module[k].module->clbkProcessMouse (event, state, x, y))
+
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		if (it->pModule && it->pModule->clbkProcessMouse(event, state, x, y))
 			consume = true;
-	}
+
 	return consume;
 }
 
 bool Orbiter::BroadcastImmediateKeyboardEvent (char *kstate)
 {
 	bool consume = false;
-	for (DWORD k = 0; k < nmodule; k++)
-		if (module[k].module->clbkProcessKeyboardImmediate (kstate, bRunning))
+
+	for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+		if (it->pModule && it->pModule->clbkProcessKeyboardImmediate(kstate, bRunning))
 			consume = true;
+
 	return consume;
 }
 
@@ -2590,10 +2612,10 @@ void Orbiter::BroadcastBufferedKeyboardEvent (char *kstate, DIDEVICEOBJECTDATA *
 		if (!(dod[i].dwData & 0x80)) continue; // only process key down events
 		DWORD key = dod[i].dwOfs;
 
-		for (DWORD k = 0; k < nmodule; k++) {
-			if (module[k].module->clbkProcessKeyboardBuffered (key, kstate, bRunning))
+		for (auto it = m_Plugin.begin(); it != m_Plugin.end(); it++)
+			if (it->pModule && it->pModule->clbkProcessKeyboardBuffered(key, kstate, bRunning))
 				consume = true;
-		}
+
 		if (consume) dod[i].dwData = 0; // remove key from process queue
 	}
 }

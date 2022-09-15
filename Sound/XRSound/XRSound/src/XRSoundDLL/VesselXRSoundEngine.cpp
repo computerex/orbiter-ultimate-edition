@@ -585,6 +585,7 @@ void VesselXRSoundEngine::LoadDefaultSounds()
     AddDefaultSound(new DockingRadarDefaultSoundPreStep(this), XRSound::DockingRadarBeep, GetConfig().DockingRadarBeep, XRSound::PlaybackType::InternalOnly);
 
     AddDefaultSound(new EngineDefaultSoundPreStep(this, THGROUP_MAIN, 0.20f, 1.0f), XRSound::MainEngines, GetConfig().MainEngines, XRSound::PlaybackType::BothViewFar);
+    AddDefaultSound(new EngineDefaultSoundPreStep(this, THGROUP_USER, 0.20f, 1.0f), XRSound::MainUserEngines, GetConfig().MainEngines, XRSound::PlaybackType::BothViewFar);
     AddDefaultSound(new EngineDefaultSoundPreStep(this, THGROUP_RETRO, 0.10f, 0.60f), XRSound::RetroEngines, GetConfig().RetroEngines, XRSound::PlaybackType::BothViewFar);
     AddDefaultSound(new EngineDefaultSoundPreStep(this, THGROUP_HOVER, 0.20f, 1.0f), XRSound::HoverEngines, GetConfig().HoverEngines, XRSound::PlaybackType::BothViewFar);
     AddDefaultSound(new RCSDefaultSoundPreStep(this), XRSound::RCSSustain, GetConfig().RCSSustain, XRSound::PlaybackType::BothViewMedium);
@@ -766,7 +767,7 @@ double VesselXRSoundEngine::GetPlasmaLevel()
     const double extTemp = GetExternalTemperature();
     const double noseconeTemp = extTemp + degreesK;
 
-    const double noseconeTempLimit = 2840 + 273;  // convert to kelvin
+    const double noseconeTempLimit = (double)2840 + (double)273;  // convert to kelvin
     const double minVisibilityTemp = noseconeTempLimit * 0.387;  // tweaked to coincide with Orbiter visual plasma; org in XR code was 0.387
     const double maxVisibilityTemp = noseconeTempLimit * 0.80;  // was 0.80 in XR code; also tweaked to coincide with Orbiter visual plasma
 

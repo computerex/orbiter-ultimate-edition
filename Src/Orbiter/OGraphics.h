@@ -18,7 +18,7 @@
 // =======================================================================
 
 struct DeviceData {
-	DWORD dwDevice;
+	int   dwDevice;
 	DWORD dwMode;
 	BOOL  bFullscreen;
 	BOOL  bStereo;
@@ -67,6 +67,7 @@ public:
 	~OrbiterGraphics ();
 	void clbkRefreshVideoData ();
 	bool clbkInitialise ();
+	void clbkCleanup();
 	HWND clbkCreateRenderWindow ();
 	void clbkPostCreation ();
 	bool clbkSplashLoadMsg (const char *msg, int line);
@@ -112,7 +113,7 @@ public:
 	inline CD3DFramework7*      GetFramework() const  { return m_pFramework; }
 	inline LPDIRECTDRAW7        GetDirectDraw() const { return m_pDD; }
 	inline LPDIRECT3D7          GetDirect3D7() const  { return m_pD3D; }
-    inline LPDIRECT3DDEVICE7    GetDevice()		 	  { return m_pd3dDevice; }
+    inline LPDIRECT3DDEVICE7    GetDevice()		 	  { return m_pD3DDevice; }
 	inline LPDIRECTDRAWSURFACE7 GetRenderTarget()     {
 		return m_pddsRenderTarget;
 	}
@@ -141,6 +142,8 @@ public:
     int clbkSetMeshMaterial (DEVMESHHANDLE hMesh, DWORD matidx, const MATERIAL *mat);
 	int clbkMeshMaterial (DEVMESHHANDLE hMesh, DWORD matidx, MATERIAL *mat);
 	bool clbkSetMeshProperty (DEVMESHHANDLE hMesh, DWORD property, DWORD value);
+	int clbkSetMaterialEx(DEVMESHHANDLE hMesh, DWORD matidx, MatProp mat, const oapi::FVECTOR4* in);
+	int clbkMeshMaterialEx(DEVMESHHANDLE hMesh, DWORD matidx, MatProp mat, oapi::FVECTOR4* out);
 
 	// surface functions
 	SURFHANDLE clbkCreateSurface (DWORD w, DWORD h, SURFHANDLE hTemplate = NULL);
@@ -198,11 +201,15 @@ private:
     bool bUseStereo;        // stereo view enabled device? (not supported)
 	bool bNoVSync;
 
+	// The Launchpad "Extra" entries added by the client
+	LaunchpadItem* m_lpiGroup;
+	LaunchpadItem* m_lpiPlanetRenderOptions;
+
 	// Framework objects
 	CD3DFramework7      *m_pFramework;
 	LPDIRECTDRAW7        m_pDD;
 	LPDIRECT3D7          m_pD3D;
-	LPDIRECT3DDEVICE7    m_pd3dDevice;
+	LPDIRECT3DDEVICE7    m_pD3DDevice;
     LPDIRECTDRAWSURFACE7 m_pddsRenderTarget;
 	LPDIRECTDRAWSURFACE7 m_pddsRenderTargetLeft; // For stereo modes (not supported)
 	DDSURFACEDESC2       m_ddsdRenderTarget;

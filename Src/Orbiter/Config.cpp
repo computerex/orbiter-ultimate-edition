@@ -174,7 +174,7 @@ CFG_RECPLAYPRM CfgRecPlayPrm_default = {
 };
 
 CFG_DEVPRM CfgDevPrm_default = {
-	-1,			// Device_idx (-1=undefined)
+	-1,	        // Device_idx (-1=undefined)
 	0,			// Device_mode
 	true,		// bForceEnum (enumerate devices at each simulation start)
 	false,		// bFullscreen (default to window mode)
@@ -405,7 +405,7 @@ bool GetItemVECTOR (istream &is, const char *label, VECTOR3 &val)
 	return true;
 }
 
-bool FindLine (istream &is, char *line)
+bool FindLine (istream &is, const char *line)
 {
 	bool ok = false;
 	is.seekg (0); // rewind stream
@@ -793,10 +793,17 @@ bool Config::Load(const char *fname)
 
 Config::~Config()
 {
-	if (Root) delete []Root;
+	if (Root) {
+		delete []Root;
+		Root = NULL;
+	}
 	if (nactmod) {
-		for (int i = 0; i < nactmod; i++) delete []actmod[i];
+		for (int i = 0; i < nactmod; i++) {
+			delete []actmod[i];
+			actmod[i] = NULL;
+		}
 		delete []actmod;
+		actmod = NULL;
 	}
 }
 
