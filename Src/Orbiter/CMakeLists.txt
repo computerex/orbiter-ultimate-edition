@@ -29,17 +29,16 @@ set(common_src
 	Vecmat.cpp
 	VectorMap.cpp
     ConsoleManager.cpp
+	TimeData.cpp
 # Launchpad
 	Launchpad.cpp
 	LpadTab.cpp
 	TabAbout.cpp
 	TabExtra.cpp
-	TabJoystick.cpp
 	TabModule.cpp
-	TabParam.cpp
+	TabOptions.cpp
 	TabScenario.cpp
 	TabVideo.cpp
-	TabVisual.cpp
 # Dialogs
 	CustomControls.cpp
 	Dialogs.cpp
@@ -53,14 +52,16 @@ set(common_src
 	DlgMap.cpp
 	DlgMenuCfg.cpp
 	DlgMgr.cpp
+	DlgOptions.cpp
 	DlgRecorder.cpp
 	DlgTacc.cpp
-	DlgVishelper.cpp
 	htmlctrl.c
 	Select.cpp
+	OptionsPages.cpp
 # Body classes
 	Body.cpp
 	BodyIntegrator.cpp
+	PinesGrav.cpp
 	Celbody.cpp
 	Planet.cpp
 	Rigidbody.cpp
@@ -98,6 +99,7 @@ set(common_src
 	MfdUser.cpp
 # API implementations
 	CamAPI.cpp
+	CelSphereAPI.cpp
 	DrawAPI.cpp
 	GraphicsAPI.cpp
 	MFDAPI.cpp
@@ -116,7 +118,6 @@ set(common_src
 	ZTreeMgr.cpp
 # Resources
 	Orbiter.rc
-	Orbiter.rc2
 	Orbiter.ico
 # Files built on the fly
 	cryptstring.h
@@ -127,6 +128,7 @@ set(common_src
 # Sources for DX7 built-in graphics version only
 set(graphics_src
 # DX7 inline graphics
+	CelSphere.cpp
 	cloudmgr2.cpp
 	CSphereMgr.cpp
 	cspheremgr2.cpp
@@ -155,7 +157,6 @@ set(Orbiter_includes
 	${CMAKE_SOURCE_DIR}/Orbitersdk/include
 	${CMAKE_SOURCE_DIR}/OVP
 	${CMAKE_CURRENT_BINARY_DIR}
-	${ZLIB_INCLUDE_DIR}
 	${HTMLHELP_INCLUDE_DIR}
 	${DX7SDK_INCLUDE_DIR}
 )
@@ -165,7 +166,7 @@ set(Orbiter_common_libs
 	comctl32.lib
 	UxTheme.lib
 	${HTML_HELP_LIBRARY}
-	${ZLIB_LIB}
+	zlib
 	${HTMLHELP_LIB}
 	$<TARGET_FILE:Orbitersdk>
 	$<TARGET_FILE:DlgCtrl>
@@ -199,7 +200,6 @@ if(BUILD_ORBITER_DX7)
 	set_target_properties(Orbiter
 		PROPERTIES
 		LINK_FLAGS "/SUBSYSTEM:WINDOWS"
-		COMPILE_FLAGS "${CompileFlags}"
 		RUNTIME_OUTPUT_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		COMPILE_DEFINITIONS "INLINEGRAPHICS;DIRECTINPUT_VERSION=0x0800"
 		ENABLE_EXPORTS 1
@@ -231,6 +231,15 @@ if(BUILD_ORBITER_DX7)
 		DESTINATION ${ORBITER_INSTALL_SDK_DIR}/lib
 	)
 	
+	if(BUILD_ORBITER_SERVER)
+		add_dependencies(Orbiter
+			Orbiter_server
+		)
+		add_custom_command(TARGET Orbiter
+			PRE_LINK
+			COMMAND del Orbiter.lib Orbiter.exp
+		)
+	endif()
 endif()
 
 # Orbiter executable (graphics server version)
@@ -238,12 +247,11 @@ if(BUILD_ORBITER_SERVER)
 
 	add_executable(Orbiter_server
 		${common_src}
-	)
+	 )
 
 	set_target_properties(Orbiter_server
 		PROPERTIES
 		LINK_FLAGS "/SUBSYSTEM:CONSOLE /ENTRY:WinMainCRTStartup"
-		COMPILE_FLAGS "${CompileFlags}"
 		RUNTIME_OUTPUT_DIRECTORY ${ORBITER_BINARY_MODULE_DIR}/Server
 		OUTPUT_NAME Orbiter
 		VS_DEBUGGER_WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
